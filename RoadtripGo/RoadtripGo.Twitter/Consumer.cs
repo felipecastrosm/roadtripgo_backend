@@ -134,7 +134,7 @@ namespace RoadtripGo.Twitter
 
 		    foreach (var entry in aliasDictionary)
 		    {
-			    if (entry.Value.Any(alias => originalString.Contains("#" + alias)))
+			    if (entry.Value.Any(alias => originalString.ToLower().Contains("#" + alias.ToLower())))
 			    {
 				    resultList.Add(entry.Key);
 			    }
