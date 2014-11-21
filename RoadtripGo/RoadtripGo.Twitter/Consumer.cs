@@ -5,8 +5,11 @@ using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Web;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Tweetinvi;
 using Tweetinvi.Core.Events.EventArguments;
+using Tweetinvi.Core.Interfaces;
 
 namespace RoadtripGo.Twitter
 {
@@ -33,7 +36,7 @@ namespace RoadtripGo.Twitter
 			this.PopulateSearchDictionary();
 		    this.PopulateBrandsDictionary();
 
-		    this.NodeApiAddress = "http://192.168.0.100/";
+			this.NodeApiAddress = "http://roadtripgoapi2.jit.su/";
 	    }
 
         public void Start()
@@ -82,7 +85,9 @@ namespace RoadtripGo.Twitter
 				//Console.WriteLine("{0} posted {1}", tweetReceivedEventArgs.Tweet.Creator.Name, tweetReceivedEventArgs.Tweet.Text);
 	            var searchParams = new SearchParams();
 
-	            string tweetText = tweetReceivedEventArgs.Tweet.Text;
+	            var tweet = tweetReceivedEventArgs.Tweet;
+
+	            string tweetText = tweet.Text;
 
 	            searchParams.Brands = this.SearchByAliasDictionary(tweetText, this.BrandsDictionary);
 	            searchParams.FuelType = this.SearchByAliasDictionary(tweetText, this.FuelTypeDictionary);
@@ -91,17 +96,70 @@ namespace RoadtripGo.Twitter
 				LocationData locationData = this.ParseLocation(tweetText);
 
 				//TODO: locationData might be null here - tweet back asking for proper url
+	            if (locationData == null)
+	            {
+					this.Reply("Ops! Não consegui identificar sua localização. Pode compartilhar de outra forma?!", tweet);
 
-	            searchParams.Latitude = locationData.Latitude;
-	            searchParams.Longitude = locationData.Longitude;
+		            return;
+	            }
+	            else
+	            {
+					searchParams.Latitude = locationData.Latitude;
+					searchParams.Longitude = locationData.Longitude;
 
-	            var client = new HttpClient();
+					var client = new HttpClient();
 
-	            var response = client.PostAsJsonAsync(this.NodeApiAddress + "gas/get_gas_station", searchParams).Result;
+					var responseBody = client.PostAsJsonAsync(this.NodeApiAddress + "gas/get_gas_station", searchParams).Result.Content.ToString();
 
-				//response.Content
+		            var responseObject = JObject.Parse(responseBody);
+
+		            foreach (var searchType in searchParams.SearchType)
+		            {
+			            var stationToken = responseObject.SelectToken(searchType);
+
+			            string searchTypeAdjective;
+
+			            switch (searchType)
+			            {
+				            case "cheapest":
+					            searchTypeAdjective = "barato";
+					            break;
+							case "nearest":
+					            searchTypeAdjective = "próximo";
+					            break;
+							case "fastest":
+					            searchTypeAdjective = "rápido de chegar";
+					            break;
+							default:
+								throw new Exception("Unknown searchType");
+			            }
+
+			            long longitude = Int64.Parse(stationToken.SelectToken("lng").ToString());
+			            long latitude = Int64.Parse(stationToken.SelectToken("lat").ToString());
+
+			            string stationName = stationToken.SelectToken("gas_station_name").ToString();
+
+			            string stationLocationUrl = stationToken.SelectToken("maps_url").ToString();
+
+						string replyText = String.Format("O posto mais {0} encontrado é o \"{1}\": {2}", searchTypeAdjective, stationName, stationLocationUrl);
+
+						this.GeoReply(replyText, tweet, longitude, latitude);
+		            }
+
+		            //response.Content
+	            }
             }
         }
+
+	    private void Reply(string replyText, ITweet tweet)
+	    {
+		    Tweet.PublishTweetInReplyTo(replyText, tweet);
+	    }
+
+	    private void GeoReply(string replyText, ITweet tweet, long longitude, long latitude)
+	    {
+		    Tweet.PublishTweetWithGeoInReplyTo(replyText, longitude, latitude, tweet);
+	    }
 
 	    private LocationData ParseLocation(string originalText)
 	    {
